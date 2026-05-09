@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package dns;
+
+option go_package = "github.com/golchanskiy23/dns-manager/gen/dns;dns";
+
+service DNSManager {
+  rpc ListDNSServers(ListDNSServersRequest) returns (ListDNSServersResponse);
+  rpc AddDNSServer(AddDNSServerRequest)     returns (AddDNSServerResponse);
+  rpc RemoveDNSServer(RemoveDNSServerRequest) returns (RemoveDNSServerResponse);
+}
+
+message ListDNSServersRequest {}
+
+message ListDNSServersResponse {
+  repeated string servers = 1;
+}
+
+message AddDNSServerRequest {
+  string ip = 1;
+}
+
+message AddDNSServerResponse {}
+
+message RemoveDNSServerRequest {
+  string ip = 1;
+}
+
+message RemoveDNSServerResponse {}
