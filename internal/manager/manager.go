@@ -168,6 +168,43 @@ func (m *Manager) Add(ip string) error {
 	return nil
 }
 
+func (m *Manager) Remove(ip string) error {
+	if net.ParseIP(ip) == nil {
+		return ErrInvalidIP
+	}
+
+	data, err := os.ReadFile(m.path)
+	if err != nil {
+		return fmt.Errorf("read resolv.conf: %w", err)
+	}
+
+	lines, err := parse(string(data))
+	if err != nil {
+		return fmt.Errorf("parse resolv.conf: %w", err)
+	}
+
+	found := false
+	filtered := lines[:0:0]
+	for _, l := range lines {
+		if l.kind == lineNameserverIP && l.ip == ip {
+			found = true
+			continue
+		}
+		filtered = append(filtered, l)
+	}
+
+	if !found {
+		return ErrNotFound
+	}
+
+	if err := writeAtomic(m.path, format(filtered)); err != nil {
+		return err
+	}
+
+	m.logger.Debug("removed nameserver", slog.String("ip", ip))
+	return nil
+}
+
 func writeAtomic(path, content string) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".resolv.conf.tmp*")

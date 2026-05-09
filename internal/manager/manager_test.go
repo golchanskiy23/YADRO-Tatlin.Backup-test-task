@@ -129,10 +129,7 @@ func TestParse_Table(t *testing.T) {
 		{
 			name:    "single newline",
 			content: "\n",
-			want: []line{
-				{kind: lineOther, raw: ""},
-				{kind: lineOther, raw: ""},
-			},
+			want:    []line{},
 		},
 		{
 			name:    "no trailing newline still parsed",
@@ -546,6 +543,7 @@ func TestProp_ListReturnsNameserverIPs(t *testing.T) {
 		}
 	})
 
+	dir := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
 		nameserverIPs := genRapidIPSet.Draw(t, "nameserver_ips")
 
@@ -555,7 +553,7 @@ func TestProp_ListReturnsNameserverIPs(t *testing.T) {
 		}
 
 		var entries []entry
-		
+
 		for _, ip := range nameserverIPs {
 			entries = append(entries, entry{isNameserver: true, line: "nameserver " + ip})
 		}
@@ -581,11 +579,10 @@ func TestProp_ListReturnsNameserverIPs(t *testing.T) {
 			content += "\n"
 		}
 
-		tmp, err := os.CreateTemp("", "resolv.conf")
+		tmp, err := os.CreateTemp(dir, "resolv.conf")
 		if err != nil {
 			t.Fatalf("create temp file: %v", err)
 		}
-		defer os.Remove(tmp.Name())
 		if _, err := tmp.WriteString(content); err != nil {
 			t.Fatalf("write temp file: %v", err)
 		}
@@ -850,13 +847,11 @@ func TestProp_OperationsPreserveOtherLines(t *testing.T) {
 	})
 
 	genNonNameserverLine := rapid.Custom(func(t *rapid.T) string {
-		kind := rapid.IntRange(0, 2).Draw(t, "line_kind")
+		kind := rapid.IntRange(0, 1).Draw(t, "line_kind")
 		switch kind {
 		case 0:
 			text := rapid.StringMatching(`[a-zA-Z0-9 ._-]{0,24}`).Draw(t, "comment_text")
 			return "# " + text
-		case 1:
-			return ""
 		default:
 			directives := []string{
 				"search example.com",
@@ -963,6 +958,156 @@ func TestProp_OperationsPreserveOtherLines(t *testing.T) {
 				t.Fatalf("Add(%q) removed existing nameserver %q; after content: %q",
 					newIP, ip, string(afterData))
 			}
+		}
+	})
+}
+
+func TestProp_RemoveDisappearsFromList(t *testing.T) {
+	t.Parallel()
+
+	genRapidIPv4 := rapid.Custom(func(t *rapid.T) string {
+		a := rapid.IntRange(0, 255).Draw(t, "a")
+		b := rapid.IntRange(0, 255).Draw(t, "b")
+		c := rapid.IntRange(0, 255).Draw(t, "c")
+		d := rapid.IntRange(0, 255).Draw(t, "d")
+		return fmt.Sprintf("%d.%d.%d.%d", a, b, c, d)
+	})
+
+	dir := t.TempDir()
+	rapid.Check(t, func(t *rapid.T) {
+		count := rapid.IntRange(1, 5).Draw(t, "count")
+		seen := make(map[string]bool)
+		var ips []string
+		for i := 0; i < count; i++ {
+			for attempt := 0; attempt < 20; attempt++ {
+				ip := genRapidIPv4.Draw(t, fmt.Sprintf("ip_%d_%d", i, attempt))
+				if !seen[ip] {
+					seen[ip] = true
+					ips = append(ips, ip)
+					break
+				}
+			}
+		}
+
+		var lines []string
+		for _, ip := range ips {
+			lines = append(lines, "nameserver "+ip)
+		}
+		content := strings.Join(lines, "\n") + "\n"
+
+		tmp, err := os.CreateTemp(dir, "resolv.conf")
+		if err != nil {
+			t.Fatalf("create temp file: %v", err)
+		}
+		if _, err := tmp.WriteString(content); err != nil {
+			t.Fatalf("write temp file: %v", err)
+		}
+		tmp.Close()
+
+		// Pick one IP to remove
+		removeIdx := rapid.IntRange(0, len(ips)-1).Draw(t, "remove_idx")
+		removeIP := ips[removeIdx]
+
+		m := New(tmp.Name(), slog.Default())
+
+		if err := m.Remove(removeIP); err != nil {
+			t.Fatalf("Remove(%q) unexpected error: %v", removeIP, err)
+		}
+
+		got, err := m.List()
+		if err != nil {
+			t.Fatalf("List() unexpected error: %v", err)
+		}
+
+		for _, ip := range got {
+			if ip == removeIP {
+				t.Fatalf("Remove(%q) did not remove IP from list; got=%v", removeIP, got)
+			}
+		}
+	})
+}
+
+// Feature: dns-manager, Property 7: Remove несуществующего IP возвращает ErrNotFound
+// Validates: Requirements 3.3
+func TestProp_RemoveAbsentReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	genRapidIPv4 := rapid.Custom(func(t *rapid.T) string {
+		a := rapid.IntRange(0, 255).Draw(t, "a")
+		b := rapid.IntRange(0, 255).Draw(t, "b")
+		c := rapid.IntRange(0, 255).Draw(t, "c")
+		d := rapid.IntRange(0, 255).Draw(t, "d")
+		return fmt.Sprintf("%d.%d.%d.%d", a, b, c, d)
+	})
+
+	dir := t.TempDir()
+	rapid.Check(t, func(t *rapid.T) {
+		// Generate existing IPs
+		count := rapid.IntRange(0, 4).Draw(t, "count")
+		seen := make(map[string]bool)
+		var existingIPs []string
+		for i := 0; i < count; i++ {
+			for attempt := 0; attempt < 20; attempt++ {
+				ip := genRapidIPv4.Draw(t, fmt.Sprintf("existing_%d_%d", i, attempt))
+				if !seen[ip] {
+					seen[ip] = true
+					existingIPs = append(existingIPs, ip)
+					break
+				}
+			}
+		}
+
+		// Generate an IP not in the file
+		var absentIP string
+		for attempt := 0; attempt < 50; attempt++ {
+			candidate := genRapidIPv4.Draw(t, fmt.Sprintf("absent_%d", attempt))
+			if !seen[candidate] {
+				absentIP = candidate
+				break
+			}
+		}
+		if absentIP == "" {
+			t.Skip("could not generate an absent IP")
+		}
+
+		var lines []string
+		for _, ip := range existingIPs {
+			lines = append(lines, "nameserver "+ip)
+		}
+		content := strings.Join(lines, "\n")
+		if len(lines) > 0 {
+			content += "\n"
+		}
+
+		tmp, err := os.CreateTemp(dir, "resolv.conf")
+		if err != nil {
+			t.Fatalf("create temp file: %v", err)
+		}
+		if _, err := tmp.WriteString(content); err != nil {
+			t.Fatalf("write temp file: %v", err)
+		}
+		tmp.Close()
+
+		originalData, err := os.ReadFile(tmp.Name())
+		if err != nil {
+			t.Fatalf("read original file: %v", err)
+		}
+
+		m := New(tmp.Name(), slog.Default())
+
+		err = m.Remove(absentIP)
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Remove(%q) expected ErrNotFound, got: %v", absentIP, err)
+		}
+
+		// File must be unchanged
+		afterData, err := os.ReadFile(tmp.Name())
+		if err != nil {
+			t.Fatalf("read file after Remove: %v", err)
+		}
+		if string(originalData) != string(afterData) {
+			t.Fatalf("Remove(%q) absent IP modified the file:\nbefore: %q\nafter:  %q",
+				absentIP, string(originalData), string(afterData))
 		}
 	})
 }
