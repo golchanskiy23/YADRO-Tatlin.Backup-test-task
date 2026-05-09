@@ -1,0 +1,13 @@
+# 2026/05/09 18:54:00.167067 [TestProp_ParseFormatRoundTrip] [rapid] draw line_count: 0
+# 2026/05/09 18:54:00.167076 [TestProp_ParseFormatRoundTrip] [rapid] draw empty_with_newline: true
+# 2026/05/09 18:54:00.167079 [TestProp_ParseFormatRoundTrip] round-trip mismatch:
+# content:   "\n"
+# parsed1:   [{0  }]
+# formatted: ""
+# parsed2:   []
+# 
+v0.4.8#13432857030382028162
+0x0
+0x0
+0x0
+0x1
