@@ -2,22 +2,26 @@ package manager
 
 import (
 	"fmt"
+	"log/slog"
+	"math/rand"
+	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
 	"pgregory.net/rapid"
 )
 
-func genValidIPv4(t *rapid.T) string {
-	a := rapid.IntRange(0, 255).Draw(t, "a")
-	b := rapid.IntRange(0, 255).Draw(t, "b")
-	c := rapid.IntRange(0, 255).Draw(t, "c")
-	d := rapid.IntRange(0, 255).Draw(t, "d")
+func genValidIPv4(r *rand.Rand) string {
+	a := r.Intn(256)
+	b := r.Intn(256)
+	c := r.Intn(256)
+	d := r.Intn(256)
 	return fmt.Sprintf("%d.%d.%d.%d", a, b, c, d)
 }
 
-func genInvalidIP(t *rapid.T) string {
+func genInvalidIP(r *rand.Rand) string {
 	candidates := []string{
 		"not-an-ip",
 		"256.0.0.1",
@@ -30,17 +34,16 @@ func genInvalidIP(t *rapid.T) string {
 		"::gggg",
 		"hostname.example.com",
 	}
-	idx := rapid.IntRange(0, len(candidates)-1).Draw(t, "invalid_ip_idx")
-	return candidates[idx]
+	return candidates[r.Intn(len(candidates))]
 }
 
-func genIPSet(t *rapid.T) []string {
-	count := rapid.IntRange(0, 5).Draw(t, "ip_count")
+func genIPSet(r *rand.Rand) []string {
+	count := r.Intn(6)
 	seen := make(map[string]bool)
 	var ips []string
 	for i := 0; i < count; i++ {
 		for attempt := 0; attempt < 20; attempt++ {
-			ip := genValidIPv4(t)
+			ip := genValidIPv4(r)
 			if !seen[ip] {
 				seen[ip] = true
 				ips = append(ips, ip)
@@ -51,21 +54,33 @@ func genIPSet(t *rapid.T) []string {
 	return ips
 }
 
+func genCommentText(r *rand.Rand) string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._-"
+	n := r.Intn(24)
+	if n == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(n)
+	for i := 0; i < n; i++ {
+		b.WriteByte(alphabet[r.Intn(len(alphabet))])
+	}
+	return b.String()
+}
 
-func genResolvConf(t *rapid.T) string {
-	lineCount := rapid.IntRange(0, 10).Draw(t, "line_count")
+func genResolvConf(r *rand.Rand) string {
+	lineCount := r.Intn(11)
 	lineKinds := []string{"nameserver", "comment", "empty", "other"}
 
 	var lines []string
 	for i := 0; i < lineCount; i++ {
-		kindIdx := rapid.IntRange(0, len(lineKinds)-1).Draw(t, fmt.Sprintf("line_kind_%d", i))
-		kind := lineKinds[kindIdx]
+		kind := lineKinds[r.Intn(len(lineKinds))]
 		switch kind {
 		case "nameserver":
-			ip := genValidIPv4(t)
+			ip := genValidIPv4(r)
 			lines = append(lines, "nameserver "+ip)
 		case "comment":
-			comment := rapid.StringMatching(`[a-zA-Z0-9 ._-]*`).Draw(t, fmt.Sprintf("comment_%d", i))
+			comment := genCommentText(r)
 			lines = append(lines, "# "+comment)
 		case "empty":
 			lines = append(lines, "")
@@ -77,20 +92,20 @@ func genResolvConf(t *rapid.T) string {
 				"options timeout:2",
 				"sortlist 130.155.160.0/255.255.240.0",
 			}
-			idx := rapid.IntRange(0, len(directives)-1).Draw(t, fmt.Sprintf("directive_%d", i))
+			idx := r.Intn(len(directives))
 			lines = append(lines, directives[idx])
 		}
 	}
 
 	if len(lines) == 0 {
-		if rapid.Bool().Draw(t, "empty_with_newline") {
+		if r.Intn(2) == 0 {
 			return "\n"
 		}
 		return ""
 	}
 
 	content := strings.Join(lines, "\n")
-	if rapid.Bool().Draw(t, "trailing_newline") {
+	if r.Intn(2) == 0 {
 		content += "\n"
 	}
 	return content
@@ -192,14 +207,14 @@ func TestParse_Table_WithGeneratedIPs(t *testing.T) {
 
 	type testCase struct {
 		name  string
-		build func(t *rapid.T) (string, []line, error)
+		build func(r *rand.Rand) (string, []line, error)
 	}
 
 	tests := []testCase{
 		{
 			name: "generated valid nameserver ip is parsed",
-			build: func(t *rapid.T) (string, []line, error) {
-				ip := genValidIPv4(t)
+			build: func(r *rand.Rand) (string, []line, error) {
+				ip := genValidIPv4(r)
 				content := "nameserver " + ip + "\n"
 				want := []line{
 					{kind: lineNameserverIP, raw: "nameserver " + ip, ip: ip},
@@ -210,16 +225,16 @@ func TestParse_Table_WithGeneratedIPs(t *testing.T) {
 		},
 		{
 			name: "generated invalid ip in nameserver returns error",
-			build: func(t *rapid.T) (string, []line, error) {
-				ip := genInvalidIP(t)
+			build: func(r *rand.Rand) (string, []line, error) {
+				ip := genInvalidIP(r)
 				content := "nameserver " + ip + "\n"
 				return content, nil, ErrInvalidConfig
 			},
 		},
 		{
 			name: "generated ip set with comments and invalid directive still parses",
-			build: func(t *rapid.T) (string, []line, error) {
-				ips := genIPSet(t)
+			build: func(r *rand.Rand) (string, []line, error) {
+				ips := genIPSet(r)
 				invalidLine := "branot namesspacer"
 
 				var contentLines []string
@@ -249,8 +264,8 @@ func TestParse_Table_WithGeneratedIPs(t *testing.T) {
 		},
 		{
 			name: "no ip at all only comments and unknown directives",
-			build: func(t *rapid.T) (string, []line, error) {
-				_ = genIPSet(t)
+			build: func(r *rand.Rand) (string, []line, error) {
+				_ = genIPSet(r)
 				content := "# only comments\n# and garbage\nbranot namesspacer\n\n"
 				want := []line{
 					{kind: lineOther, raw: "# only comments"},
@@ -264,15 +279,15 @@ func TestParse_Table_WithGeneratedIPs(t *testing.T) {
 		},
 		{
 			name: "nameserver without ip returns error",
-			build: func(t *rapid.T) (string, []line, error) {
+			build: func(r *rand.Rand) (string, []line, error) {
 				content := "nameserver\n"
 				return content, nil, ErrInvalidConfig
 			},
 		},
 		{
 			name: "nameserver with inline comment returns error",
-			build: func(t *rapid.T) (string, []line, error) {
-				ip := genValidIPv4(t)
+			build: func(r *rand.Rand) (string, []line, error) {
+				ip := genValidIPv4(r)
 				content := "nameserver " + ip + " # comment\n"
 				return content, nil, ErrInvalidConfig
 			},
@@ -283,8 +298,9 @@ func TestParse_Table_WithGeneratedIPs(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rapid.Check(t, func(rt *rapid.T) {
-				content, want, wantErr := tc.build(rt)
+			for i := 0; i < 100; i++ {
+				r := rand.New(rand.NewSource(int64(i + 1)))
+				content, want, wantErr := tc.build(r)
 				got, err := parse(content)
 				if wantErr != nil {
 					if err == nil {
@@ -301,14 +317,17 @@ func TestParse_Table_WithGeneratedIPs(t *testing.T) {
 				if !reflect.DeepEqual(got, want) {
 					t.Fatalf("parse(%q) mismatch:\nwant: %#v\ngot:  %#v", content, want, got)
 				}
-			})
+			}
 		})
 	}
 }
 
 func TestProp_ParseFormatRoundTrip(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		content := genResolvConf(t)
+	t.Parallel()
+
+	for i := 0; i < 500; i++ {
+		r := rand.New(rand.NewSource(int64(i + 1)))
+		content := genResolvConf(r)
 		parsed1, err := parse(content)
 		if err != nil {
 			t.Fatalf("parse(content) unexpected error: %v, content=%q", err, content)
@@ -321,6 +340,288 @@ func TestProp_ParseFormatRoundTrip(t *testing.T) {
 		if !reflect.DeepEqual(parsed1, parsed2) {
 			t.Fatalf("round-trip mismatch:\ncontent:   %q\nparsed1:   %v\nformatted: %q\nparsed2:   %v",
 				content, parsed1, formatted, parsed2)
+		}
+	}
+}
+
+func TestManager_List(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name:    "empty file returns empty slice",
+			content: "",
+			want:    []string{},
+		},
+		{
+			name:    "single nameserver",
+			content: "nameserver 1.1.1.1\n",
+			want:    []string{"1.1.1.1"},
+		},
+		{
+			name:    "multiple nameservers",
+			content: "nameserver 1.1.1.1\nnameserver 8.8.8.8\n",
+			want:    []string{"1.1.1.1", "8.8.8.8"},
+		},
+		{
+			name:    "nameservers with comments and other directives",
+			content: "# comment\noptions ndots:5\nnameserver 9.9.9.9\n\nnameserver 8.8.4.4\n",
+			want:    []string{"9.9.9.9", "8.8.4.4"},
+		},
+		{
+			name:    "no nameserver lines returns empty slice",
+			content: "# only comments\noptions ndots:5\n",
+			want:    []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Write content to a temp file
+			tmp, err := os.CreateTemp(t.TempDir(), "resolv.conf")
+			if err != nil {
+				t.Fatalf("create temp file: %v", err)
+			}
+			if _, err := tmp.WriteString(tt.content); err != nil {
+				t.Fatalf("write temp file: %v", err)
+			}
+			tmp.Close()
+
+			m := New(tmp.Name(), slog.Default())
+			got, err := m.List()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("List() expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("List() unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("List() mismatch:\nwant: %v\ngot:  %v", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestManager_ListWithNameserver(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		want    []Nameserver
+		wantErr bool
+	}{
+		{
+			name:    "empty file returns empty slice",
+			content: "",
+			want:    []Nameserver{},
+		},
+		{
+			name:    "single nameserver",
+			content: "nameserver 1.1.1.1\n",
+			want: []Nameserver{
+				{IP: "1.1.1.1", Line: "nameserver 1.1.1.1"},
+			},
+		},
+		{
+			name:    "multiple nameservers with extra lines",
+			content: "# comment\nnameserver 1.1.1.1\noptions ndots:5\nnameserver 8.8.8.8\n",
+			want: []Nameserver{
+				{IP: "1.1.1.1", Line: "nameserver 1.1.1.1"},
+				{IP: "8.8.8.8", Line: "nameserver 8.8.8.8"},
+			},
+		},
+		{
+			name:    "invalid nameserver line returns error",
+			content: "nameserver not-an-ip\n",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmp, err := os.CreateTemp(t.TempDir(), "resolv.conf")
+			if err != nil {
+				t.Fatalf("create temp file: %v", err)
+			}
+			if _, err := tmp.WriteString(tt.content); err != nil {
+				t.Fatalf("write temp file: %v", err)
+			}
+			tmp.Close()
+
+			m := New(tmp.Name(), slog.Default())
+			got, err := m.ListNameserverIP()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ListWithNameserver() expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ListWithNameserver() unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("ListWithNameserver() mismatch:\nwant: %#v\ngot:  %#v", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestManager_List_ReadError(t *testing.T) {
+	t.Parallel()
+
+	m := New("/nonexistent/path/resolv.conf", slog.Default())
+	_, err := m.List()
+	if err == nil {
+		t.Fatal("List() expected error for missing file, got nil")
+	}
+	if !strings.Contains(err.Error(), "read resolv.conf") {
+		t.Fatalf("List() error should contain 'read resolv.conf', got: %v", err)
+	}
+}
+
+func TestProp_ListReturnsNameserverIPs(t *testing.T) {
+	t.Parallel()
+
+	genRapidIPv4 := rapid.Custom(func(t *rapid.T) string {
+		a := rapid.IntRange(0, 255).Draw(t, "a")
+		b := rapid.IntRange(0, 255).Draw(t, "b")
+		c := rapid.IntRange(0, 255).Draw(t, "c")
+		d := rapid.IntRange(0, 255).Draw(t, "d")
+		return fmt.Sprintf("%d.%d.%d.%d", a, b, c, d)
+	})
+
+	genRapidIPSet := rapid.Custom(func(t *rapid.T) []string {
+		count := rapid.IntRange(0, 5).Draw(t, "count")
+		seen := make(map[string]bool)
+		var ips []string
+		for i := 0; i < count; i++ {
+			for attempt := 0; attempt < 20; attempt++ {
+				ip := genRapidIPv4.Draw(t, fmt.Sprintf("ip_%d_%d", i, attempt))
+				if !seen[ip] {
+					seen[ip] = true
+					ips = append(ips, ip)
+					break
+				}
+			}
+		}
+		return ips
+	})
+
+	genNonNameserverLine := rapid.Custom(func(t *rapid.T) string {
+		kind := rapid.IntRange(0, 2).Draw(t, "line_kind")
+		switch kind {
+		case 0:
+			text := rapid.StringMatching(`[a-zA-Z0-9 ._-]{0,24}`).Draw(t, "comment_text")
+			return "# " + text
+		case 1:
+			return ""
+		default:
+			directives := []string{
+				"search example.com",
+				"domain local",
+				"options ndots:5",
+				"options timeout:2",
+				"sortlist 130.155.160.0/255.255.240.0",
+			}
+			idx := rapid.IntRange(0, len(directives)-1).Draw(t, "directive_idx")
+			return directives[idx]
+		}
+	})
+
+	rapid.Check(t, func(t *rapid.T) {
+		nameserverIPs := genRapidIPSet.Draw(t, "nameserver_ips")
+
+		type entry struct {
+			isNameserver bool
+			line         string
+		}
+
+		var entries []entry
+		
+		for _, ip := range nameserverIPs {
+			entries = append(entries, entry{isNameserver: true, line: "nameserver " + ip})
+		}
+
+		extraCount := rapid.IntRange(0, 4).Draw(t, "extra_count")
+		for i := 0; i < extraCount; i++ {
+			l := genNonNameserverLine.Draw(t, fmt.Sprintf("extra_%d", i))
+			entries = append(entries, entry{isNameserver: false, line: l})
+		}
+
+		shuffled := append([]entry(nil), entries...)
+		for i := len(shuffled) - 1; i > 0; i-- {
+			j := rapid.IntRange(0, i).Draw(t, fmt.Sprintf("shuffle_%d", i))
+			shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+		}
+
+		var lines []string
+		for _, e := range shuffled {
+			lines = append(lines, e.line)
+		}
+		content := strings.Join(lines, "\n")
+		if len(lines) > 0 {
+			content += "\n"
+		}
+
+		tmp, err := os.CreateTemp("", "resolv.conf")
+		if err != nil {
+			t.Fatalf("create temp file: %v", err)
+		}
+		defer os.Remove(tmp.Name())
+		if _, err := tmp.WriteString(content); err != nil {
+			t.Fatalf("write temp file: %v", err)
+		}
+		tmp.Close()
+
+		m := New(tmp.Name(), slog.Default())
+		got, err := m.List()
+		if err != nil {
+			t.Fatalf("List() unexpected error: %v (content=%q)", err, content)
+		}
+
+		if len(got) != len(nameserverIPs) {
+			t.Fatalf("List() returned %d IPs, want %d; content=%q got=%v want=%v",
+				len(got), len(nameserverIPs), content, got, nameserverIPs)
+		}
+
+		seen := make(map[string]bool, len(got))
+		for _, ip := range got {
+			if seen[ip] {
+				t.Fatalf("List() returned duplicate IP %q; content=%q got=%v", ip, content, got)
+			}
+			seen[ip] = true
+		}
+
+		wantSet := make(map[string]bool, len(nameserverIPs))
+		for _, ip := range nameserverIPs {
+			wantSet[ip] = true
+		}
+		gotSet := make(map[string]bool, len(got))
+		for _, ip := range got {
+			gotSet[ip] = true
+		}
+		if !reflect.DeepEqual(gotSet, wantSet) {
+			wantSorted := append([]string(nil), nameserverIPs...)
+			ipsSorted := append([]string(nil), got...)
+			sort.Strings(wantSorted)
+			sort.Strings(ipsSorted)
+			t.Fatalf("List() IP set mismatch:\nwant: %v\ngot:  %v\ncontent: %q",
+				wantSorted, ipsSorted, content)
 		}
 	})
 }

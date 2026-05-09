@@ -2,8 +2,11 @@ package manager
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -25,6 +28,11 @@ type line struct {
 	kind lineType
 	raw  string
 	ip   string
+}
+
+type Nameserver struct {
+	IP   string
+	Line string
 }
 
 type Manager struct {
@@ -84,4 +92,65 @@ func format(lines []line) string {
 		raws[i] = line.raw
 	}
 	return strings.Join(raws, "\n")
+}
+
+func (m *Manager) ListNameserverIP() ([]Nameserver, error) {
+	data, err := os.ReadFile(m.path)
+	if err != nil {
+		return nil, fmt.Errorf("read resolv.conf: %w", err)
+	}
+
+	lines, err := parse(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("read resolv.conf: %w", err)
+	}
+
+	servers := make([]Nameserver, 0)
+	for _, line := range lines {
+		if line.kind == lineNameserverIP {
+			servers = append(servers, Nameserver{
+				IP:   line.ip,
+				Line: line.raw,
+			})
+		}
+	}
+	return servers, nil
+}
+
+func (m *Manager) List() ([]string, error) {
+	servers, err := m.ListNameserverIP()
+	if err != nil {
+		return nil, err
+	}
+
+	ips := make([]string, 0, len(servers))
+	for _, s := range servers {
+		ips = append(ips, s.IP)
+	}
+	return ips, nil
+}
+
+func writeAtomic(path, content string) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".resolv.conf.tmp*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+
+	if _, err = tmp.WriteString(content); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err = tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	if err = os.Rename(tmp.Name(), path); err != nil {
+		os.Remove(tmp.Name())
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	return nil
 }
