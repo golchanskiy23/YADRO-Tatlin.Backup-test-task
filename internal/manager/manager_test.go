@@ -1004,7 +1004,6 @@ func TestProp_RemoveDisappearsFromList(t *testing.T) {
 		}
 		tmp.Close()
 
-		// Pick one IP to remove
 		removeIdx := rapid.IntRange(0, len(ips)-1).Draw(t, "remove_idx")
 		removeIP := ips[removeIdx]
 
@@ -1027,8 +1026,6 @@ func TestProp_RemoveDisappearsFromList(t *testing.T) {
 	})
 }
 
-// Feature: dns-manager, Property 7: Remove несуществующего IP возвращает ErrNotFound
-// Validates: Requirements 3.3
 func TestProp_RemoveAbsentReturnsNotFound(t *testing.T) {
 	t.Parallel()
 
@@ -1042,7 +1039,6 @@ func TestProp_RemoveAbsentReturnsNotFound(t *testing.T) {
 
 	dir := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
-		// Generate existing IPs
 		count := rapid.IntRange(0, 4).Draw(t, "count")
 		seen := make(map[string]bool)
 		var existingIPs []string
@@ -1057,7 +1053,6 @@ func TestProp_RemoveAbsentReturnsNotFound(t *testing.T) {
 			}
 		}
 
-		// Generate an IP not in the file
 		var absentIP string
 		for attempt := 0; attempt < 50; attempt++ {
 			candidate := genRapidIPv4.Draw(t, fmt.Sprintf("absent_%d", attempt))
@@ -1100,7 +1095,6 @@ func TestProp_RemoveAbsentReturnsNotFound(t *testing.T) {
 			t.Fatalf("Remove(%q) expected ErrNotFound, got: %v", absentIP, err)
 		}
 
-		// File must be unchanged
 		afterData, err := os.ReadFile(tmp.Name())
 		if err != nil {
 			t.Fatalf("read file after Remove: %v", err)
@@ -1110,4 +1104,88 @@ func TestProp_RemoveAbsentReturnsNotFound(t *testing.T) {
 				absentIP, string(originalData), string(afterData))
 		}
 	})
+}
+
+func TestList_EmptyFile(t *testing.T) {
+	t.Parallel()
+	tmp, err := os.CreateTemp(t.TempDir(), "resolv.conf")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	tmp.Close()
+
+	m := New(tmp.Name(), slog.Default())
+	got, listErr := m.List()
+	if listErr != nil {
+		t.Fatalf("List() unexpected error: %v", listErr)
+	}
+	if len(got) != 0 {
+		t.Fatalf("List() on empty file want [], got %v", got)
+	}
+}
+
+func TestAdd_FileNotWritable(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("running as root, chmod restrictions do not apply")
+	}
+
+	dir := t.TempDir()
+	tmp, err := os.CreateTemp(dir, "resolv.conf")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	if _, err := tmp.WriteString("nameserver 1.1.1.1\n"); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	tmp.Close()
+
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Skipf("cannot chmod dir: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	m := New(tmp.Name(), slog.Default())
+	if addErr := m.Add("8.8.8.8"); addErr == nil {
+		t.Fatal("Add() expected error for non-writable dir, got nil")
+	}
+}
+
+func TestRemove_FileNotWritable(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("running as root, chmod restrictions do not apply")
+	}
+
+	dir := t.TempDir()
+	tmp, err := os.CreateTemp(dir, "resolv.conf")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	if _, err := tmp.WriteString("nameserver 1.1.1.1\n"); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	tmp.Close()
+
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Skipf("cannot chmod dir: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	m := New(tmp.Name(), slog.Default())
+	if removeErr := m.Remove("1.1.1.1"); removeErr == nil {
+		t.Fatal("Remove() expected error for non-writable dir, got nil")
+	}
+}
+
+func TestWriteAtomic_FailOnWrite(t *testing.T) {
+	t.Parallel()
+	err := writeAtomic("/nonexistent/dir/resolv.conf", "nameserver 1.1.1.1\n")
+	if err == nil {
+		t.Fatal("writeAtomic() expected error for non-existent dir, got nil")
+	}
+
+	if _, statErr := os.Stat("/nonexistent/dir/resolv.conf"); statErr == nil {
+		t.Fatal("writeAtomic() created file in non-existent dir")
+	}
 }
