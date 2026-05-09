@@ -11,16 +11,24 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// dnsManager is the interface used by DNSManagerService to interact with the
+// underlying DNS manager. It allows injecting fakes in tests.
+type dnsManager interface {
+	List() ([]string, error)
+	Add(ip string) error
+	Remove(ip string) error
+}
+
 type DNSManagerService struct {
 	pb.UnimplementedDNSManagerServer
-	manager *manager.Manager
+	manager dnsManager
 	logger  *slog.Logger
 }
 
 func New(m *manager.Manager, logger *slog.Logger) *DNSManagerService {
-	return &DNSManagerService {
-		manager: m, 
-		logger: logger,
+	return &DNSManagerService{
+		manager: m,
+		logger:  logger,
 	}
 }
 
