@@ -18,7 +18,7 @@ var (
 )
 
 const (
-	lineOther      lineType = iota
+	lineOther lineType = iota
 	lineNameserverIP
 )
 
@@ -128,6 +128,44 @@ func (m *Manager) List() ([]string, error) {
 		ips = append(ips, s.IP)
 	}
 	return ips, nil
+}
+
+func (m *Manager) Add(ip string) error {
+	if net.ParseIP(ip) == nil {
+		return ErrInvalidIP
+	}
+
+	data, err := os.ReadFile(m.path)
+	if err != nil {
+		return fmt.Errorf("read resolv.conf: %w", err)
+	}
+
+	raws, err := parse(string(data))
+	if err != nil {
+		return fmt.Errorf("parse resolv.conf: %w", err)
+	}
+
+	for _, raw := range raws {
+		if raw.kind == lineNameserverIP && raw.ip == ip {
+			return ErrAlreadyExists
+		}
+	}
+
+	raw := line{
+		kind: lineNameserverIP,
+		raw:  "nameserver " + ip,
+		ip:   ip,
+	}
+
+	raws = append(raws, raw)
+
+	formatted := format(raws)
+	if err := writeAtomic(m.path, formatted); err != nil {
+		return err
+	}
+
+	m.logger.Debug("added nameserver", slog.String("ip", ip))
+	return nil
 }
 
 func writeAtomic(path, content string) error {

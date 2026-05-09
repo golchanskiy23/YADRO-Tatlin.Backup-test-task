@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -128,7 +129,10 @@ func TestParse_Table(t *testing.T) {
 		{
 			name:    "single newline",
 			content: "\n",
-			want:    []line{},
+			want: []line{
+				{kind: lineOther, raw: ""},
+				{kind: lineOther, raw: ""},
+			},
 		},
 		{
 			name:    "no trailing newline still parsed",
@@ -385,7 +389,6 @@ func TestManager_List(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			// Write content to a temp file
 			tmp, err := os.CreateTemp(t.TempDir(), "resolv.conf")
 			if err != nil {
 				t.Fatalf("create temp file: %v", err)
@@ -622,6 +625,344 @@ func TestProp_ListReturnsNameserverIPs(t *testing.T) {
 			sort.Strings(ipsSorted)
 			t.Fatalf("List() IP set mismatch:\nwant: %v\ngot:  %v\ncontent: %q",
 				wantSorted, ipsSorted, content)
+		}
+	})
+}
+
+func TestProp_AddAppearsInList(t *testing.T) {
+	t.Parallel()
+
+	genRapidIPv4 := rapid.Custom(func(t *rapid.T) string {
+		a := rapid.IntRange(0, 255).Draw(t, "a")
+		b := rapid.IntRange(0, 255).Draw(t, "b")
+		c := rapid.IntRange(0, 255).Draw(t, "c")
+		d := rapid.IntRange(0, 255).Draw(t, "d")
+		return fmt.Sprintf("%d.%d.%d.%d", a, b, c, d)
+	})
+
+	rapid.Check(t, func(t *rapid.T) {
+		existingCount := rapid.IntRange(0, 4).Draw(t, "existing_count")
+		seen := make(map[string]bool)
+		var existingIPs []string
+		for i := 0; i < existingCount; i++ {
+			for attempt := 0; attempt < 20; attempt++ {
+				ip := genRapidIPv4.Draw(t, fmt.Sprintf("existing_ip_%d_%d", i, attempt))
+				if !seen[ip] {
+					seen[ip] = true
+					existingIPs = append(existingIPs, ip)
+					break
+				}
+			}
+		}
+
+		var newIP string
+		for attempt := 0; attempt < 50; attempt++ {
+			candidate := genRapidIPv4.Draw(t, fmt.Sprintf("new_ip_%d", attempt))
+			if !seen[candidate] {
+				newIP = candidate
+				break
+			}
+		}
+		if newIP == "" {
+			t.Skip("could not generate a unique new IP")
+		}
+
+		var lines []string
+		for _, ip := range existingIPs {
+			lines = append(lines, "nameserver "+ip)
+		}
+		content := strings.Join(lines, "\n")
+		if len(lines) > 0 {
+			content += "\n"
+		}
+
+		tmp, err := os.CreateTemp("", "resolv.conf")
+		if err != nil {
+			t.Fatalf("create temp file: %v", err)
+		}
+		defer os.Remove(tmp.Name())
+		if _, err := tmp.WriteString(content); err != nil {
+			t.Fatalf("write temp file: %v", err)
+		}
+		tmp.Close()
+
+		m := New(tmp.Name(), slog.Default())
+
+		if err := m.Add(newIP); err != nil {
+			t.Fatalf("Add(%q) unexpected error: %v", newIP, err)
+		}
+
+		got, err := m.List()
+		if err != nil {
+			t.Fatalf("List() unexpected error: %v", err)
+		}
+
+		found := false
+		for _, ip := range got {
+			if ip == newIP {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Add(%q) did not add IP to list; got=%v", newIP, got)
+		}
+	})
+}
+
+func TestProp_InvalidIPRejected(t *testing.T) {
+	t.Parallel()
+
+	genRapidInvalidIP := rapid.Custom(func(t *rapid.T) string {
+		candidates := []string{
+			"not-an-ip",
+			"256.0.0.1",
+			"1.2.3",
+			"1.2.3.4.5",
+			"abc",
+			"",
+			"999.999.999.999",
+			"1.2.3.-1",
+			"::gggg",
+			"hostname.example.com",
+			"300.300.300.300",
+			"1.2.3.4.5.6",
+			"foo bar",
+		}
+		idx := rapid.IntRange(0, len(candidates)-1).Draw(t, "invalid_ip_idx")
+		return candidates[idx]
+	})
+
+	rapid.Check(t, func(t *rapid.T) {
+		invalidIP := genRapidInvalidIP.Draw(t, "invalid_ip")
+
+		content := "nameserver 1.1.1.1\n"
+		tmp, err := os.CreateTemp("", "resolv.conf")
+		if err != nil {
+			t.Fatalf("create temp file: %v", err)
+		}
+		defer os.Remove(tmp.Name())
+		if _, err := tmp.WriteString(content); err != nil {
+			t.Fatalf("write temp file: %v", err)
+		}
+		tmp.Close()
+
+		originalData, err := os.ReadFile(tmp.Name())
+		if err != nil {
+			t.Fatalf("read original file: %v", err)
+		}
+
+		m := New(tmp.Name(), slog.Default())
+
+		err = m.Add(invalidIP)
+		if !errors.Is(err, ErrInvalidIP) {
+			t.Fatalf("Add(%q) expected ErrInvalidIP, got: %v", invalidIP, err)
+		}
+
+		afterData, err := os.ReadFile(tmp.Name())
+		if err != nil {
+			t.Fatalf("read file after Add: %v", err)
+		}
+		if string(originalData) != string(afterData) {
+			t.Fatalf("Add(%q) with invalid IP modified the file:\nbefore: %q\nafter:  %q",
+				invalidIP, string(originalData), string(afterData))
+		}
+	})
+}
+
+func TestProp_AddDuplicateReturnsAlreadyExists(t *testing.T) {
+	t.Parallel()
+
+	genRapidIPv4 := rapid.Custom(func(t *rapid.T) string {
+		a := rapid.IntRange(0, 255).Draw(t, "a")
+		b := rapid.IntRange(0, 255).Draw(t, "b")
+		c := rapid.IntRange(0, 255).Draw(t, "c")
+		d := rapid.IntRange(0, 255).Draw(t, "d")
+		return fmt.Sprintf("%d.%d.%d.%d", a, b, c, d)
+	})
+
+	rapid.Check(t, func(t *rapid.T) {
+		existingCount := rapid.IntRange(1, 4).Draw(t, "existing_count")
+		seen := make(map[string]bool)
+		var existingIPs []string
+		for i := 0; i < existingCount; i++ {
+			for attempt := 0; attempt < 20; attempt++ {
+				ip := genRapidIPv4.Draw(t, fmt.Sprintf("existing_ip_%d_%d", i, attempt))
+				if !seen[ip] {
+					seen[ip] = true
+					existingIPs = append(existingIPs, ip)
+					break
+				}
+			}
+		}
+
+		var lines []string
+		for _, ip := range existingIPs {
+			lines = append(lines, "nameserver "+ip)
+		}
+		content := strings.Join(lines, "\n") + "\n"
+
+		tmp, err := os.CreateTemp("", "resolv.conf")
+		if err != nil {
+			t.Fatalf("create temp file: %v", err)
+		}
+		defer os.Remove(tmp.Name())
+		if _, err := tmp.WriteString(content); err != nil {
+			t.Fatalf("write temp file: %v", err)
+		}
+		tmp.Close()
+
+		originalData, err := os.ReadFile(tmp.Name())
+		if err != nil {
+			t.Fatalf("read original file: %v", err)
+		}
+
+		dupIdx := rapid.IntRange(0, len(existingIPs)-1).Draw(t, "dup_idx")
+		dupIP := existingIPs[dupIdx]
+
+		m := New(tmp.Name(), slog.Default())
+
+		err = m.Add(dupIP)
+		if !errors.Is(err, ErrAlreadyExists) {
+			t.Fatalf("Add(%q) expected ErrAlreadyExists, got: %v", dupIP, err)
+		}
+
+		afterData, err := os.ReadFile(tmp.Name())
+		if err != nil {
+			t.Fatalf("read file after duplicate Add: %v", err)
+		}
+		if string(originalData) != string(afterData) {
+			t.Fatalf("Add(%q) duplicate modified the file:\nbefore: %q\nafter:  %q",
+				dupIP, string(originalData), string(afterData))
+		}
+	})
+}
+
+func TestProp_OperationsPreserveOtherLines(t *testing.T) {
+	t.Parallel()
+
+	genRapidIPv4 := rapid.Custom(func(t *rapid.T) string {
+		a := rapid.IntRange(0, 255).Draw(t, "a")
+		b := rapid.IntRange(0, 255).Draw(t, "b")
+		c := rapid.IntRange(0, 255).Draw(t, "c")
+		d := rapid.IntRange(0, 255).Draw(t, "d")
+		return fmt.Sprintf("%d.%d.%d.%d", a, b, c, d)
+	})
+
+	genNonNameserverLine := rapid.Custom(func(t *rapid.T) string {
+		kind := rapid.IntRange(0, 2).Draw(t, "line_kind")
+		switch kind {
+		case 0:
+			text := rapid.StringMatching(`[a-zA-Z0-9 ._-]{0,24}`).Draw(t, "comment_text")
+			return "# " + text
+		case 1:
+			return ""
+		default:
+			directives := []string{
+				"search example.com",
+				"domain local",
+				"options ndots:5",
+				"options timeout:2",
+				"sortlist 130.155.160.0/255.255.240.0",
+			}
+			idx := rapid.IntRange(0, len(directives)-1).Draw(t, "directive_idx")
+			return directives[idx]
+		}
+	})
+
+	rapid.Check(t, func(t *rapid.T) {
+		existingCount := rapid.IntRange(0, 3).Draw(t, "existing_count")
+		seen := make(map[string]bool)
+		var existingIPs []string
+		for i := 0; i < existingCount; i++ {
+			for attempt := 0; attempt < 20; attempt++ {
+				ip := genRapidIPv4.Draw(t, fmt.Sprintf("existing_ip_%d_%d", i, attempt))
+				if !seen[ip] {
+					seen[ip] = true
+					existingIPs = append(existingIPs, ip)
+					break
+				}
+			}
+		}
+
+		otherCount := rapid.IntRange(0, 4).Draw(t, "other_count")
+		var otherLines []string
+		for i := 0; i < otherCount; i++ {
+			l := genNonNameserverLine.Draw(t, fmt.Sprintf("other_%d", i))
+			otherLines = append(otherLines, l)
+		}
+
+		var allLines []string
+		for _, ip := range existingIPs {
+			allLines = append(allLines, "nameserver "+ip)
+		}
+		allLines = append(allLines, otherLines...)
+		content := strings.Join(allLines, "\n")
+		if len(allLines) > 0 {
+			content += "\n"
+		}
+
+		tmp, err := os.CreateTemp("", "resolv.conf")
+		if err != nil {
+			t.Fatalf("create temp file: %v", err)
+		}
+		defer os.Remove(tmp.Name())
+		if _, err := tmp.WriteString(content); err != nil {
+			t.Fatalf("write temp file: %v", err)
+		}
+		tmp.Close()
+
+		m := New(tmp.Name(), slog.Default())
+
+		var newIP string
+		for attempt := 0; attempt < 50; attempt++ {
+			candidate := genRapidIPv4.Draw(t, fmt.Sprintf("new_ip_%d", attempt))
+			if !seen[candidate] {
+				newIP = candidate
+				break
+			}
+		}
+		if newIP == "" {
+			t.Skip("could not generate a unique new IP")
+		}
+
+		if err := m.Add(newIP); err != nil {
+			t.Fatalf("Add(%q) unexpected error: %v", newIP, err)
+		}
+
+		afterData, err := os.ReadFile(tmp.Name())
+		if err != nil {
+			t.Fatalf("read file after Add: %v", err)
+		}
+		afterLines, err := parse(string(afterData))
+		if err != nil {
+			t.Fatalf("parse file after Add: %v", err)
+		}
+
+		afterRaws := make(map[string]int)
+		for _, l := range afterLines {
+			afterRaws[l.raw]++
+		}
+
+		for _, ol := range otherLines {
+			if afterRaws[ol] == 0 {
+				t.Fatalf("Add(%q) removed other line %q; after content: %q",
+					newIP, ol, string(afterData))
+			}
+			afterRaws[ol]--
+		}
+
+		afterIPSet := make(map[string]bool)
+		for _, l := range afterLines {
+			if l.kind == lineNameserverIP {
+				afterIPSet[l.ip] = true
+			}
+		}
+		for _, ip := range existingIPs {
+			if !afterIPSet[ip] {
+				t.Fatalf("Add(%q) removed existing nameserver %q; after content: %q",
+					newIP, ip, string(afterData))
+			}
 		}
 	})
 }
