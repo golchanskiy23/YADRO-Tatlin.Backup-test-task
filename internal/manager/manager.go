@@ -139,8 +139,8 @@ func (m *Manager) List() ([]string, error) {
 	return ips, nil
 }
 
-// Warning: if "resolv.conf" contains more than 3 nameservers
-// than glibc-based systems will only use first 3
+// Warning: if "resolv.conf" contains more than 3 nameservers,
+// glibc-based systems will only use the first 3.
 func (m *Manager) Add(ip string) error {
 	if net.ParseIP(ip) == nil {
 		return ErrInvalidIP

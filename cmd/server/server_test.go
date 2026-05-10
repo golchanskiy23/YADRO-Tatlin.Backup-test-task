@@ -17,7 +17,6 @@ func TestServer_PortFromEnv(t *testing.T) {
 		if err != nil {
 			t.Skipf("could not bind to %s: %v", addr, err)
 		}
-		
 		lis.Close()
 		return lis, nil
 	}

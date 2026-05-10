@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	pb "github.com/golchanskiy23/dns-manager/gen/dns"
 	"github.com/golchanskiy23/dns-manager/internal/manager"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"log/slog"
 )
 
 type fakeManager struct {

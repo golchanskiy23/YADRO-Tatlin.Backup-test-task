@@ -7,11 +7,12 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/golchanskiy23/dns-manager/gen/dns"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+
+	pb "github.com/golchanskiy23/dns-manager/gen/dns"
 )
 
 type fakeServer struct {

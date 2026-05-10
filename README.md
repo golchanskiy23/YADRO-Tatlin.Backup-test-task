@@ -7,7 +7,12 @@
 ## Требования
 
 - Go 1.21+
-- `protoc` + плагины `protoc-gen-go` и `protoc-gen-go-grpc` — только если нужно пересобрать proto
+- `make` — для удобного запуска команд сборки, тестов и линтера
+- `golangci-lint` — для запуска линтера (`make lint`):
+  ```bash
+  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+  ```
+- (опционально) `protoc` + плагины `protoc-gen-go` и `protoc-gen-go-grpc` — только если нужно пересобрать proto
 
 ## Быстрый старт
 

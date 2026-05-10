@@ -10,10 +10,11 @@ import (
 	"strings"
 	"syscall"
 
+	"google.golang.org/grpc"
+
 	dnsv1 "github.com/golchanskiy23/dns-manager/gen/dns"
 	"github.com/golchanskiy23/dns-manager/internal/manager"
 	"github.com/golchanskiy23/dns-manager/internal/service"
-	"google.golang.org/grpc"
 )
 
 func parseLogLevel(level string) slog.Level {

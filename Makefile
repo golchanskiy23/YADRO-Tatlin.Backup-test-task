@@ -1,4 +1,4 @@
-.PHONY: proto build test
+.PHONY: proto build test lint
 
 proto:
 	protoc --go_out=gen/dns --go-grpc_out=gen/dns \
@@ -14,3 +14,6 @@ test:
 
 cover:
 	go test -cover ./...
+
+lint:
+	golangci-lint run ./...

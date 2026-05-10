@@ -6,10 +6,11 @@ import (
 	"io"
 	"os"
 
-	pb "github.com/golchanskiy23/dns-manager/gen/dns"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	pb "github.com/golchanskiy23/dns-manager/gen/dns"
 )
 
 var serverAddr string
