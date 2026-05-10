@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 var (
@@ -36,6 +37,7 @@ type Nameserver struct {
 }
 
 type Manager struct {
+	mu     sync.RWMutex
 	path   string
 	logger *slog.Logger
 }
@@ -95,6 +97,9 @@ func format(lines []line) string {
 }
 
 func (m *Manager) ListNameserverIP() ([]Nameserver, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	data, err := os.ReadFile(m.path)
 	if err != nil {
 		return nil, fmt.Errorf("read resolv.conf: %w", err)
@@ -137,6 +142,9 @@ func (m *Manager) Add(ip string) error {
 		return ErrInvalidIP
 	}
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	data, err := os.ReadFile(m.path)
 	if err != nil {
 		return fmt.Errorf("read resolv.conf: %w", err)
@@ -174,6 +182,9 @@ func (m *Manager) Remove(ip string) error {
 	if net.ParseIP(ip) == nil {
 		return ErrInvalidIP
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	data, err := os.ReadFile(m.path)
 	if err != nil {
