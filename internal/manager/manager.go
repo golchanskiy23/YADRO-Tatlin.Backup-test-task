@@ -15,7 +15,6 @@ var (
 	ErrAlreadyExists = errors.New("dns server already exists")
 	ErrNotFound      = errors.New("dns server not found")
 	ErrInvalidIP     = errors.New("invalid IP address")
-	ErrInvalidConfig = errors.New("invalid resolv.conf content")
 )
 
 const (
@@ -67,15 +66,20 @@ func parse(content string) ([]line, error) {
 	for _, raw := range strings.Split(content, "\n") {
 		fields := strings.Fields(raw)
 		if len(fields) > 0 && fields[0] == "nameserver" {
-			if len(fields) != 2 || net.ParseIP(fields[1]) == nil {
-				return nil, ErrInvalidConfig
+			if len(fields) == 2 {
+				ipStr := fields[1]
+				if idx := strings.IndexByte(ipStr, '%'); idx != -1 {
+					ipStr = ipStr[:idx]
+				}
+				if net.ParseIP(ipStr) != nil {
+					lines = append(lines, line{
+						kind: lineNameserverIP,
+						raw:  raw,
+						ip:   fields[1],
+					})
+					continue
+				}
 			}
-			lines = append(lines, line{
-				kind: lineNameserverIP,
-				raw:  raw,
-				ip:   fields[1],
-			})
-			continue
 		}
 
 		lines = append(lines, line{kind: lineOther, raw: raw})

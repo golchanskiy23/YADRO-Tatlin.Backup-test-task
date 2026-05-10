@@ -158,12 +158,18 @@ func TestParse_Table(t *testing.T) {
 		{
 			name:    "invalid nameserver ip treated as other",
 			content: "nameserver not-an-ip\n",
-			wantErr: ErrInvalidConfig,
+			want: []line{
+				{kind: lineOther, raw: "nameserver not-an-ip"},
+				{kind: lineOther, raw: ""},
+			},
 		},
 		{
 			name:    "nameserver with inline comment treated as other",
 			content: "nameserver 1.1.1.1 # cloudflare\n",
-			wantErr: ErrInvalidConfig,
+			want: []line{
+				{kind: lineOther, raw: "nameserver 1.1.1.1 # cloudflare"},
+				{kind: lineOther, raw: ""},
+			},
 		},
 		{
 			name:    "mixed content preserved",
@@ -225,11 +231,15 @@ func TestParse_Table_WithGeneratedIPs(t *testing.T) {
 			},
 		},
 		{
-			name: "generated invalid ip in nameserver returns error",
+			name: "generated invalid ip in nameserver treated as other",
 			build: func(r *rand.Rand) (string, []line, error) {
 				ip := genInvalidIP(r)
 				content := "nameserver " + ip + "\n"
-				return content, nil, ErrInvalidConfig
+				want := []line{
+					{kind: lineOther, raw: "nameserver " + ip},
+					{kind: lineOther, raw: ""},
+				}
+				return content, want, nil
 			},
 		},
 		{
@@ -279,18 +289,26 @@ func TestParse_Table_WithGeneratedIPs(t *testing.T) {
 			},
 		},
 		{
-			name: "nameserver without ip returns error",
+			name: "nameserver without ip treated as other",
 			build: func(r *rand.Rand) (string, []line, error) {
 				content := "nameserver\n"
-				return content, nil, ErrInvalidConfig
+				want := []line{
+					{kind: lineOther, raw: "nameserver"},
+					{kind: lineOther, raw: ""},
+				}
+				return content, want, nil
 			},
 		},
 		{
-			name: "nameserver with inline comment returns error",
+			name: "nameserver with inline comment treated as other",
 			build: func(r *rand.Rand) (string, []line, error) {
 				ip := genValidIPv4(r)
 				content := "nameserver " + ip + " # comment\n"
-				return content, nil, ErrInvalidConfig
+				want := []line{
+					{kind: lineOther, raw: "nameserver " + ip + " # comment"},
+					{kind: lineOther, raw: ""},
+				}
+				return content, want, nil
 			},
 		},
 	}
@@ -443,9 +461,9 @@ func TestManager_ListWithNameserver(t *testing.T) {
 			},
 		},
 		{
-			name:    "invalid nameserver line returns error",
+			name:    "invalid nameserver line treated as other, not returned",
 			content: "nameserver not-an-ip\n",
-			wantErr: true,
+			want:    []Nameserver{},
 		},
 	}
 
