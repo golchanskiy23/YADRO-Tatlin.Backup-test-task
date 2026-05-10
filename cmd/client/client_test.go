@@ -69,7 +69,7 @@ func testDeps() (*deps, *bytes.Buffer, *bytes.Buffer, *int) {
 func TestHelp(t *testing.T) {
 	d, stdout, _, _ := testDeps()
 	cmd := buildRootCmd(d)
-	cmd.SetOut(stdout) // cobra writes help to cmd's out
+	cmd.SetOut(stdout)
 	cmd.SetArgs([]string{"--help"})
 	_ = cmd.Execute()
 
