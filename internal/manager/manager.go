@@ -130,6 +130,8 @@ func (m *Manager) List() ([]string, error) {
 	return ips, nil
 }
 
+// Warning: if "resolv.conf" contains more than 3 nameservers
+// than glibc-based systems will only use first 3
 func (m *Manager) Add(ip string) error {
 	if net.ParseIP(ip) == nil {
 		return ErrInvalidIP
@@ -206,24 +208,28 @@ func (m *Manager) Remove(ip string) error {
 }
 
 func writeAtomic(path, content string) error {
-	dir := filepath.Dir(path)
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		realPath = path
+	}
+
+	dir := filepath.Dir(realPath)
 	tmp, err := os.CreateTemp(dir, ".resolv.conf.tmp*")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 
+	defer os.Remove(tmp.Name())
+
 	if _, err = tmp.WriteString(content); err != nil {
 		tmp.Close()
-		os.Remove(tmp.Name())
 		return fmt.Errorf("write temp file: %w", err)
 	}
 	if err = tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
-	if err = os.Rename(tmp.Name(), path); err != nil {
-		os.Remove(tmp.Name())
+	if err = os.Rename(tmp.Name(), realPath); err != nil {
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 
