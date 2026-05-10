@@ -1,4 +1,4 @@
-package server
+package service
 
 import (
 	"context"
@@ -11,8 +11,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// dnsManager is the interface used by DNSManagerService to interact with the
-// underlying DNS manager. It allows injecting fakes in tests.
 type dnsManager interface {
 	List() ([]string, error)
 	Add(ip string) error

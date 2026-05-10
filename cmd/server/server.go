@@ -6,11 +6,13 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	dnsv1 "github.com/golchanskiy23/dns-manager/gen/dns"
 	"github.com/golchanskiy23/dns-manager/internal/manager"
-	"github.com/golchanskiy23/dns-manager/internal/server"
+	"github.com/golchanskiy23/dns-manager/internal/service"
 	"google.golang.org/grpc"
 )
 
@@ -48,7 +50,7 @@ func run(args []string, environ func(string) string, listenFn func(network, addr
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 
 	mgr := manager.New("", logger)
-	svc := server.New(mgr, logger)
+	svc := service.New(mgr, logger)
 
 	grpcServer := grpc.NewServer()
 	dnsv1.RegisterDNSManagerServer(grpcServer, svc)
@@ -61,6 +63,14 @@ func run(args []string, environ func(string) string, listenFn func(network, addr
 	}
 
 	logger.Info("starting gRPC server", slog.String("addr", addr))
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-quit
+		logger.Info("received signal, shutting down", slog.String("signal", sig.String()))
+		grpcServer.GracefulStop()
+	}()
 
 	if err := grpcServer.Serve(lis); err != nil {
 		fmt.Fprintf(stderr, "gRPC server error: %v\n", err)
