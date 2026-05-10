@@ -43,8 +43,8 @@ func TestServer_FailToListen(t *testing.T) {
 
 	environ := func(key string) string { return "" }
 
-	code := run(nil, environ, listenFn, os.Stderr)
-	if code != 1 {
-		t.Errorf("run() exit code = %d, want 1", code)
+	err := run(nil, environ, listenFn, os.Stderr)
+	if err == nil {
+		t.Fatal("run() expected error, got nil")
 	}
 }

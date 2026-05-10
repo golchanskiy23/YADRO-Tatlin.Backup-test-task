@@ -1,4 +1,4 @@
-.PHONY: proto build test lint
+.PHONY: proto build test lint fmt
 
 proto:
 	protoc --go_out=gen/dns --go-grpc_out=gen/dns \

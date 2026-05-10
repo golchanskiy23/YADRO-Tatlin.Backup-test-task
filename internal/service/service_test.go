@@ -34,10 +34,7 @@ func (f *fakeManager) Remove(_ string) error {
 }
 
 func newTestService(m dnsManager) *DNSManagerService {
-	return &DNSManagerService{
-		manager: m,
-		logger:  slog.Default(),
-	}
+	return New(m, slog.Default())
 }
 
 func grpcCode(err error) codes.Code {

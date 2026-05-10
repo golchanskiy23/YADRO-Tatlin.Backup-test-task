@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 
 	"google.golang.org/grpc"
@@ -16,6 +18,11 @@ import (
 	"github.com/golchanskiy23/dns-manager/internal/manager"
 	"github.com/golchanskiy23/dns-manager/internal/service"
 )
+
+const defaultResolvConf = "/etc/resolv.conf"
+
+type env func(string) string
+type listener func(network, addr string) (net.Listener, error)
 
 func parseLogLevel(level string) slog.Level {
 	switch strings.ToUpper(level) {
@@ -29,7 +36,7 @@ func parseLogLevel(level string) slog.Level {
 	return slog.LevelInfo
 }
 
-func run(args []string, environ func(string) string, listenFn func(network, addr string) (net.Listener, error), stderr *os.File) int {
+func run(args []string, environ env, listenFn listener, stderr *os.File) error {
 	envPort := environ("DNS_MANAGER_PORT")
 	if envPort == "" {
 		envPort = "50051"
@@ -40,17 +47,17 @@ func run(args []string, environ func(string) string, listenFn func(network, addr
 	}
 
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	port := fs.String("port", envPort, "TCP port to listen on")
 	logLevel := fs.String("log-level", envLogLevel, "Log level (DEBUG, INFO, WARN, ERROR)")
 	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(stderr, "flag parse error: %v\n", err)
-		return 1
+		return fmt.Errorf("error detected: %v", err)
 	}
 
 	level := parseLogLevel(*logLevel)
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
+	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
 
-	mgr := manager.New("", logger)
+	mgr := manager.New(defaultResolvConf, logger)
 	svc := service.New(mgr, logger)
 
 	grpcServer := grpc.NewServer()
@@ -59,30 +66,38 @@ func run(args []string, environ func(string) string, listenFn func(network, addr
 	addr := ":" + *port
 	lis, err := listenFn("tcp", addr)
 	if err != nil {
-		fmt.Fprintf(stderr, "failed to listen on %s: %v\n", addr, err)
-		return 1
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
 
 	logger.Info("starting gRPC server", slog.String("addr", addr))
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(quit)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		sig := <-quit
 		logger.Info("received signal, shutting down", slog.String("signal", sig.String()))
 		grpcServer.GracefulStop()
 	}()
 
 	if err := grpcServer.Serve(lis); err != nil {
-		fmt.Fprintf(stderr, "gRPC server error: %v\n", err)
-		return 1
+		return fmt.Errorf("gRPC server error: %w", err)
 	}
-	return 0
+
+	wg.Wait()
+	return nil
 }
 
 func main() {
-	code := run(os.Args[1:], os.Getenv, net.Listen, os.Stderr)
-	if code != 0 {
-		os.Exit(code)
+	if err := run(os.Args[1:], os.Getenv, net.Listen, os.Stderr); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
 }

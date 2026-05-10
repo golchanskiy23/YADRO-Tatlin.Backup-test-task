@@ -24,7 +24,7 @@ type DNSManagerService struct {
 	logger  *slog.Logger
 }
 
-func New(m *manager.Manager, logger *slog.Logger) *DNSManagerService {
+func New(m dnsManager, logger *slog.Logger) *DNSManagerService {
 	return &DNSManagerService{
 		manager: m,
 		logger:  logger,
@@ -44,7 +44,7 @@ func toGRPCError(err error) error {
 	}
 }
 
-func (s *DNSManagerService) ListDNSServers(ctx context.Context, req *pb.ListDNSServersRequest) (*pb.ListDNSServersResponse, error) {
+func (s *DNSManagerService) ListDNSServers(_ context.Context, _ *pb.ListDNSServersRequest) (*pb.ListDNSServersResponse, error) {
 	s.logger.Info("ListDNSServers called")
 
 	ips, err := s.manager.List()
@@ -57,26 +57,28 @@ func (s *DNSManagerService) ListDNSServers(ctx context.Context, req *pb.ListDNSS
 	return &pb.ListDNSServersResponse{Servers: ips}, nil
 }
 
-func (s *DNSManagerService) AddDNSServer(ctx context.Context, req *pb.AddDNSServerRequest) (*pb.AddDNSServerResponse, error) {
-	s.logger.Info("AddDNSServer called", slog.String("ip", req.GetIp()))
+func (s *DNSManagerService) AddDNSServer(_ context.Context, req *pb.AddDNSServerRequest) (*pb.AddDNSServerResponse, error) {
+	ip := req.GetIp()
+	s.logger.Info("AddDNSServer called", slog.String("ip", ip))
 
-	if err := s.manager.Add(req.GetIp()); err != nil {
-		s.logger.Error("AddDNSServer failed", slog.String("ip", req.GetIp()), slog.String("error", err.Error()))
+	if err := s.manager.Add(ip); err != nil {
+		s.logger.Error("AddDNSServer failed", slog.String("ip", ip), slog.String("error", err.Error()))
 		return nil, toGRPCError(err)
 	}
 
-	s.logger.Info("AddDNSServer succeeded", slog.String("ip", req.GetIp()))
+	s.logger.Info("AddDNSServer succeeded", slog.String("ip", ip))
 	return &pb.AddDNSServerResponse{}, nil
 }
 
-func (s *DNSManagerService) RemoveDNSServer(ctx context.Context, req *pb.RemoveDNSServerRequest) (*pb.RemoveDNSServerResponse, error) {
-	s.logger.Info("RemoveDNSServer called", slog.String("ip", req.GetIp()))
+func (s *DNSManagerService) RemoveDNSServer(_ context.Context, req *pb.RemoveDNSServerRequest) (*pb.RemoveDNSServerResponse, error) {
+	ip := req.GetIp()
+	s.logger.Info("RemoveDNSServer called", slog.String("ip", ip))
 
-	if err := s.manager.Remove(req.GetIp()); err != nil {
-		s.logger.Error("RemoveDNSServer failed", slog.String("ip", req.GetIp()), slog.String("error", err.Error()))
+	if err := s.manager.Remove(ip); err != nil {
+		s.logger.Error("RemoveDNSServer failed", slog.String("ip", ip), slog.String("error", err.Error()))
 		return nil, toGRPCError(err)
 	}
 
-	s.logger.Info("RemoveDNSServer succeeded", slog.String("ip", req.GetIp()))
+	s.logger.Info("RemoveDNSServer succeeded", slog.String("ip", ip))
 	return &pb.RemoveDNSServerResponse{}, nil
 }

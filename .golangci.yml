@@ -27,3 +27,7 @@ issues:
     - source: "status\\.Error\\("
       linters:
         - wrapcheck
+    # flag.FlagSet.Parse — ошибка из stdlib, передаётся напрямую
+    - source: "fs\\.Parse\\("
+      linters:
+        - wrapcheck

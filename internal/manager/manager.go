@@ -30,11 +30,6 @@ type line struct {
 	ip   string
 }
 
-type Nameserver struct {
-	IP   string
-	Line string
-}
-
 type Manager struct {
 	mu     sync.RWMutex
 	path   string
@@ -51,92 +46,61 @@ func New(path string, logger *slog.Logger) *Manager {
 	}
 }
 
-func parse(content string) ([]line, error) {
-	hasSuffix := strings.HasSuffix(content, "\n")
-	if hasSuffix {
-		content = content[:len(content)-1]
-	}
-
+func parse(content string) []line {
+	content = strings.TrimSuffix(content, "\n")
 	if content == "" {
-		return []line{}, nil
+		return []line{}
 	}
 
 	var lines []line
-
 	for _, raw := range strings.Split(content, "\n") {
 		fields := strings.Fields(raw)
-		if len(fields) > 0 && fields[0] == "nameserver" {
-			if len(fields) == 2 {
-				ipStr := fields[1]
-				if idx := strings.IndexByte(ipStr, '%'); idx != -1 {
-					ipStr = ipStr[:idx]
-				}
-				if net.ParseIP(ipStr) != nil {
-					lines = append(lines, line{
-						kind: lineNameserverIP,
-						raw:  raw,
-						ip:   fields[1],
-					})
-					continue
-				}
+		if len(fields) == 2 && fields[0] == "nameserver" {
+			ipStr := fields[1]
+			if idx := strings.IndexByte(ipStr, '%'); idx != -1 {
+				ipStr = ipStr[:idx]
+			}
+			if net.ParseIP(ipStr) != nil {
+				lines = append(lines, line{
+					kind: lineNameserverIP,
+					raw:  raw,
+					ip:   fields[1],
+				})
+				continue
 			}
 		}
-
 		lines = append(lines, line{kind: lineOther, raw: raw})
 	}
-
-	if hasSuffix {
-		lines = append(lines, line{kind: lineOther, raw: ""})
-	}
-
-	return lines, nil
+	return lines
 }
 
 func format(lines []line) string {
 	raws := make([]string, len(lines))
-	for i, line := range lines {
-		raws[i] = line.raw
+	for i, l := range lines {
+		raws[i] = l.raw
 	}
-	return strings.Join(raws, "\n")
+	return strings.Join(raws, "\n") + "\n"
 }
 
-func (m *Manager) ListNameserverIP() ([]Nameserver, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
+func (m *Manager) listNameservers() ([]string, error) {
 	data, err := os.ReadFile(m.path)
 	if err != nil {
 		return nil, fmt.Errorf("read resolv.conf: %w", err)
 	}
 
-	lines, err := parse(string(data))
-	if err != nil {
-		return nil, fmt.Errorf("read resolv.conf: %w", err)
-	}
-
-	servers := make([]Nameserver, 0)
-	for _, line := range lines {
-		if line.kind == lineNameserverIP {
-			servers = append(servers, Nameserver{
-				IP:   line.ip,
-				Line: line.raw,
-			})
+	var ips []string
+	for _, l := range parse(string(data)) {
+		if l.kind == lineNameserverIP {
+			ips = append(ips, l.ip)
 		}
 	}
-	return servers, nil
+	return ips, nil
 }
 
 func (m *Manager) List() ([]string, error) {
-	servers, err := m.ListNameserverIP()
-	if err != nil {
-		return nil, err
-	}
-
-	ips := make([]string, 0, len(servers))
-	for _, s := range servers {
-		ips = append(ips, s.IP)
-	}
-	return ips, nil
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.listNameservers()
 }
 
 // Warning: if "resolv.conf" contains more than 3 nameservers,
@@ -154,27 +118,21 @@ func (m *Manager) Add(ip string) error {
 		return fmt.Errorf("read resolv.conf: %w", err)
 	}
 
-	raws, err := parse(string(data))
-	if err != nil {
-		return fmt.Errorf("parse resolv.conf: %w", err)
-	}
+	lines := parse(string(data))
 
-	for _, raw := range raws {
-		if raw.kind == lineNameserverIP && raw.ip == ip {
+	for _, l := range lines {
+		if l.kind == lineNameserverIP && l.ip == ip {
 			return ErrAlreadyExists
 		}
 	}
 
-	raw := line{
+	lines = append(lines, line{
 		kind: lineNameserverIP,
 		raw:  "nameserver " + ip,
 		ip:   ip,
-	}
+	})
 
-	raws = append(raws, raw)
-
-	formatted := format(raws)
-	if err := writeAtomic(m.path, formatted); err != nil {
+	if err := writeAtomic(m.path, format(lines)); err != nil {
 		return err
 	}
 
@@ -195,13 +153,10 @@ func (m *Manager) Remove(ip string) error {
 		return fmt.Errorf("read resolv.conf: %w", err)
 	}
 
-	lines, err := parse(string(data))
-	if err != nil {
-		return fmt.Errorf("parse resolv.conf: %w", err)
-	}
+	lines := parse(string(data))
 
+	filtered := make([]line, 0, len(lines))
 	found := false
-	filtered := lines[:0:0]
 	for _, l := range lines {
 		if l.kind == lineNameserverIP && l.ip == ip {
 			found = true
@@ -233,7 +188,6 @@ func writeAtomic(path, content string) error {
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
-
 	defer os.Remove(tmp.Name())
 
 	if _, err = tmp.WriteString(content); err != nil {
